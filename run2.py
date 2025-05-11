@@ -1,95 +1,119 @@
 import sys
-import time 
 import collections
-
+import heapq
 
 def get_input():
     """Чтение данных из стандартного ввода."""
     return [list(line.strip()) for line in sys.stdin]
 
-def convert_key_to_bit(key):
-    return 1 << ord(key) - ord('a')
 
-def min_steps_to_collect_all_keys(data):
+def find_paths(x, y, map):
     """
-    Минимальное решение задачи, рассчитываю сделать другое, если успею конечно. 
-    Вычисляет позиции роботов и хранит битовую маску ключей, которые нужно найти.
-    Далее запускает небольшую модификацию алгоритма обхода б. дерева в ширину, храня позиции всех роботов. 
-    Работает очень медленно, больше чем за минуту решает лабиринт 100x100. 
-    Планирую сделать решение таковым:
-    с помощью обхода в ширину найдем пути до ключей для каждого робота. Затем через алгоритм Дейкстры найдем минимальную сумму шагов. 
+    Реализация обхода лабиринта в ширину для построения графа.
+    Алгоритм принимает координаты узла графа и сам лабиринт. 
+    Возвращает все грани исходящие из данной точки графа.
     """
-    keys = 0
-    robots = []
-    max_Y = len(data) - 1
-    min_Y = 0 
-    max_X = len(data[0]) - 1
-    min_X = 0
+    width = len(map[0])
+    height = len(map)
+    start_state = ((y,x), frozenset()) #храним в деке состояния из координат и необходимых ключей, чтобы добраться до данного ключа
+    queue = collections.deque()
     moves = [(1,0),(-1,0), (0,1), (0,-1)]
+    queue.append((start_state,0)) #добавляем к прошлому кортежу количество шагов
 
+    visited = set()
+    visited.add(start_state)
+
+    edges = []
+
+    while queue:
+        (((robot_Y, robot_X), required_keys), steps) = queue.popleft()
+        for dx, dy in moves:
+            new_x = robot_X + dx
+            new_y = robot_Y + dy 
+            new_pos = (new_y, new_x)
+            if new_pos in visited:
+                continue
+            visited.add(new_pos)
+            if not (0 <= new_x < width) or not (0 <= new_y < height):
+                continue
+            cell = map[new_y][new_x]
+            if cell == "#":
+                continue
+            new_keys = set(required_keys)   
+            if 'A' <= cell <= 'Z':
+                new_keys.add(cell) #добавляем ключ для этой двери в необходимые
+            
+            new_keys_freeze = frozenset(new_keys) 
+            if 'a' <= cell <= 'z':
+                if not (new_x == x and new_y == y):
+                    edges.append((cell, steps + 1, new_keys_freeze)) #добавляем "соседство" между узлами графа
+             
+            new_state = (new_pos, new_keys_freeze)
+            queue.append((new_state, steps + 1)) 
+    return edges #возвращаем список соседей узла
+
+
+
+def count_min_steps(start_positions, graph, map, total_keys, key_positions):
+    """
+    Реализация алгоритма Дейкстры для подсчета минимального количества шагов по 
+    созданному ранее графу.
+    """
+    start_pos = tuple(start_positions)
+    heap = [(0, 0, start_pos, frozenset())] #используем кучу из heapq чтобы всегда брать элемент с минимальным количеством шагов до него
+    distance = {}
+    counter = 0 #заводим счетчик, дабы heapq не ругался на сравнение tuple и int
+
+    while heap:
+        steps, _, positions, collected_keys = heapq.heappop(heap) #храним в куче шаги, счетчик, позиции соседей, собранные ключи
+        state = (positions, collected_keys)
+        if state in distance and distance[state] <= steps:
+            continue
+        distance[state] = steps
+        if collected_keys == total_keys:
+            return steps
+        for index, (pos_Y, pos_X) in enumerate(positions): #проходим в цикле по позициям всех роботов в данный момент
+            cell = map[pos_Y][pos_X]
+            if cell == "@":
+                cell = "@" + str(pos_X) + str(pos_Y) #дабы уникально идентифицировать каждого робота
+            for key, cost, doors in graph[cell]: #проходим по каждому соседу данной точки
+                if key in collected_keys:
+                    continue
+                if any(door.lower() not in collected_keys for door in doors):
+                    continue
+                new_keys = frozenset(set(collected_keys) | {key}) #создаем новый фрозенсет с добавленным туда ключом
+                new_positions = list(positions)
+                new_positions[index] = key_positions[key] #переходим в следующую вершину графа
+                counter += 1
+                heapq.heappush(heap, (steps + cost, counter, tuple(new_positions), frozenset(new_keys))) 
+    return -1
+
+def min_steps_to_collect_all_keys():
+    """
+    Решение задачи с использованием алгоритмов обхода лабиринта в ширину и Дейкстры.
+    Сперва строим граф от роботов к ключам и от ключей к другим ключам, попутно считая необходимые двери.
+    А затем находим минимальное количество шагов по графу. 
+    """
+    data = get_input()
+    total_keys = set() 
+    graph = {}
+    start_positions = []
+    key_positions = {} #позиции ключей, для их дальнейшего использования в алгоритме
     for indexY,string in enumerate(data):
         for indexX, el  in enumerate(string):
             if el == "#" or el == ".":
                 continue
             if el == "@":
-                robots.append((indexY, indexX))
-                continue
-            if 97 <= ord(el) <= 122:
-                order = convert_key_to_bit(el)
-                keys |= order
-     
-    queue = collections.deque()
-    start_position = (tuple(robots), 0)
-    queue.append((start_position, 0))
-    visited = set()
-    visited.add(start_position)
-
-    while queue: 
-        (robot_positions, collected_keys), steps_count = queue.popleft()
-         
-        if collected_keys == keys:
-            return steps_count 
+                pos = el + str(indexX) + str(indexY) #опять же добавляем опознавательные символы каждому роботу
+                start_positions.append((indexY, indexX))
+                graph[pos] = find_paths(indexX, indexY, data) #строим ребра к соседям для каждого робота
+            if 'a' <= el <= 'z':
+                total_keys.add(el)
+                key_positions[el] = (indexY, indexX)
+                graph[el] = find_paths(indexX, indexY, data) #строим ребра до каждого соседа ключа
+    min_steps = count_min_steps(start_positions, graph, data, frozenset(total_keys), key_positions) #считаем минимальное количество шагов по графу
+    print(min_steps)
         
-        for index, (robotY, robotX) in enumerate(robot_positions):
-            for dx, dy in moves:
-                new_x = robotX + dx
-                new_y = robotY + dy 
-
-                new_keys = collected_keys
-                map_position = data[new_y][new_x]
-
-                if not (min_X <= new_x <= max_X) or not (min_Y <= new_y <= max_Y):
-                    continue
-
-                if map_position == "#":
-                    continue
-
-                if "a" <= map_position <= "z":
-                    new_keys |= convert_key_to_bit(map_position)
-                
-                if "A" <= map_position <= "Z":
-                    if not (collected_keys & convert_key_to_bit(map_position.lower())):
-                        continue
-
-                new_positions = list(robot_positions)
-                new_positions[index] = (new_y, new_x)
-                new_state = (tuple(new_positions), new_keys)
-
-                if new_state not in visited:
-                    visited.add(new_state)
-                    queue.append((new_state, steps_count + 1))
-    return -1
-
-
-
-
-
-def main():
-    data = get_input()
-    start = time.time()
-    result = min_steps_to_collect_all_keys(data)
-    print(time.time() - start)
-
 
 if __name__ == '__main__':
-    main()
+    min_steps_to_collect_all_keys()
